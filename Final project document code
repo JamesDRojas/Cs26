@@ -1,0 +1,328 @@
+import json
+from pathlib import Path
+
+DATA_FILE = Path("student_grade_data.json") 
+courses = []
+
+
+def load_data():
+    """Load saved courses and assessments from JSON."""
+    global courses
+    if DATA_FILE.exists():
+        try:
+            with DATA_FILE.open("r", encoding="utf-8") as file:
+                courses = json.load(file)
+            print(f"Loaded {len(courses)} course(s) from {DATA_FILE}.")
+        except (json.JSONDecodeError, OSError):
+            courses = []
+            print("Warning: saved data could not be read; starting empty.")
+
+
+def save_data():
+    """Save courses and assessments to JSON."""
+    try:
+        with DATA_FILE.open("w", encoding="utf-8") as file:
+            json.dump(courses, file, indent=4)
+        print("Data saved successfully.")
+    except OSError as error:
+        print(f"Error saving data: {error}")
+
+
+
+def get_float(prompt, minimum=0, maximum=100):
+    while True:
+        try:
+            value = float(input(prompt))
+            if minimum <= value <= maximum:
+                return value
+            print(f"Enter a value from {minimum} to {maximum}.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+
+def get_int(prompt, minimum=1):
+    while True:
+        try:
+            value = int(input(prompt))
+            if value >= minimum:
+                return value
+            print(f"Enter a number of at least {minimum}.")
+        except ValueError:
+            print("Please enter a whole number.")
+
+
+def letter_grade(percent):
+    if percent >= 90:
+        return "A", 4.0
+    elif percent >= 85:
+        return "B+", 3.5
+    elif percent >= 80:
+        return "B", 3.0
+    elif percent >= 75:
+        return "C+", 2.5
+    elif percent >= 70:
+        return "C", 2.0
+    elif percent >= 65:
+        return "D", 1.0
+    return "F", 0.0
+
+
+def add_course():
+    print("\n--- Add Course ---")
+    code = input("Course code: ").strip()
+    title = input("Course title: ").strip()
+    instructor = input("Instructor: ").strip()
+    credits = get_int("Credit hours: ")
+
+    print("\nEnter category weights. Their total must be 100%.")
+    weights = {}
+    while True:
+        weights = {
+            "Quizzes": get_float("Quizzes weight (%): "),
+            "Exams": get_float("Exams weight (%): "),
+            "Projects": get_float("Projects weight (%): ")
+        }
+        if abs(sum(weights.values()) - 100) < 0.001:
+            break
+        print("The weights must total exactly 100%. Please try again.")
+
+    course = {
+        "code": code,
+        "title": title,
+        "instructor": instructor,
+        "credits": credits,
+        "weights": weights,
+        "assessments": {"Quizzes": [], "Exams": [], "Projects": []}
+    }
+    courses.append(course)
+    save_data()
+    print("Course added successfully!")
+
+
+def select_course():
+    if not courses:
+        print("No courses have been added yet.")
+        return None
+
+    print("\n--- Courses ---")
+    for i, course in enumerate(courses, 1):
+        print(f"{i}. {course['code']} - {course['title']}")
+
+    choice = get_int("Select course number: ")
+    if choice > len(courses):
+        print("Invalid course number.")
+        return None
+    return courses[choice - 1]
+
+
+def add_assessment():
+    course = select_course()
+    if course is None:
+        return
+
+    print("\nCategories: Quizzes, Exams, Projects")
+    category = input("Category: ").strip().title()
+    if category not in course["assessments"]:
+        print("Invalid category.")
+        return
+
+    name = input("Assessment name: ").strip()
+    maximum = get_float("Maximum score: ", minimum=0.01, maximum=1000000)
+    score = get_float("Score achieved: ", minimum=0, maximum=maximum)
+
+    course["assessments"][category].append({
+        "name": name,
+        "score": score,
+        "maximum": maximum
+    })
+    save_data()
+    print("Assessment recorded!")
+
+
+def category_average(assessments):
+    if not assessments:
+        return None
+    total_score = sum(item["score"] for item in assessments)
+    total_maximum = sum(item["maximum"] for item in assessments)
+    return (total_score / total_maximum) * 100
+
+
+def calculate_grade(course):
+    weighted_total = 0
+    completed_weight = 0
+
+    for category, weight in course["weights"].items():
+        average = category_average(course["assessments"][category])
+        if average is not None:
+            weighted_total += average * (weight / 100)
+            completed_weight += weight
+
+    if completed_weight == 0:
+        return None, 0
+
+    # Current grade is normalized over categories with recorded assessments.
+    current_grade = weighted_total / (completed_weight / 100)
+    return current_grade, completed_weight
+
+
+def show_course_summary():
+    course = select_course()
+    if course is None:
+        return
+
+    print(f"\n--- {course['code']} Course Summary ---")
+    print(f"Title: {course['title']}")
+    print(f"Instructor: {course['instructor']}")
+    print(f"Credits: {course['credits']}")
+
+    for category, weight in course["weights"].items():
+        average = category_average(course["assessments"][category])
+        if average is None:
+            print(f"{category} ({weight}%): No scores yet")
+        else:
+            print(f"{category} ({weight}%): {average:.2f}%")
+
+        for item in course["assessments"][category]:
+            print(f"  - {item['name']}: {item['score']}/{item['maximum']}")
+
+    grade, completed_weight = calculate_grade(course)
+    if grade is None:
+        print("Overall grade: No assessments recorded")
+        return
+
+    letter, _ = letter_grade(grade)
+    print(f"\nCurrent grade: {grade:.2f}% ({letter})")
+    print(f"Assessment categories completed: {completed_weight:.0f}% of course weight")
+
+    if grade < 75:
+        print("WARNING: This course is currently below the 75% passing threshold.")
+    else:
+        print("Status: At or above the 75% passing threshold.")
+
+
+def calculate_gpa():
+    if not courses:
+        print("No courses available.")
+        return
+
+    total_quality_points = 0
+    total_credits = 0
+
+    print("\n--- GPA Summary ---")
+    for course in courses:
+        grade, _ = calculate_grade(course)
+        if grade is None:
+            print(f"{course['code']}: No grade yet (excluded)")
+            continue
+
+        letter, points = letter_grade(grade)
+        credits = course["credits"]
+        quality_points = points * credits
+        total_quality_points += quality_points
+        total_credits += credits
+        print(f"{course['code']}: {grade:.2f}% ({letter}) | {credits} credits")
+
+    if total_credits == 0:
+        print("GPA cannot be calculated yet.")
+        return
+
+    gpa = total_quality_points / total_credits
+    print(f"\nTotal completed/graded credits: {total_credits}")
+    print(f"Cumulative GPA: {gpa:.2f} / 4.00")
+
+
+def forecast_grade():
+    course = select_course()
+    if course is None:
+        return
+
+    current_grade, completed_weight = calculate_grade(course)
+    if current_grade is None:
+        current_grade = 0
+
+    target = get_float("Target final percentage (0-100): ")
+    remaining_weight = 100 - completed_weight
+
+    print(f"Current grade: {current_grade:.2f}%")
+    print(f"Remaining course weight: {remaining_weight:.2f}%")
+
+    if remaining_weight <= 0:
+        print("All category weights have assessments recorded.")
+        print(f"Final calculated grade: {current_grade:.2f}%")
+        return
+
+    # Current grade is normalized over completed categories.
+    needed = (target - (current_grade * completed_weight / 100)) / (remaining_weight / 100)
+
+    if needed <= 0:
+        print("You have already secured the target based on recorded work.")
+    elif needed > 100:
+        print(f"You need {needed:.2f}% on the remaining weighted work; this is not possible.")
+    else:
+        print(f"You need an average of {needed:.2f}% on remaining work to reach {target:.2f}%.")
+
+
+def academic_dashboard():
+    print("\n========== ACADEMIC DASHBOARD ==========")
+    if not courses:
+        print("No courses added.")
+        return
+
+    total_credits = sum(course["credits"] for course in courses)
+    print(f"Courses enrolled: {len(courses)}")
+    print(f"Total enrolled credits: {total_credits}")
+
+    graded = []
+    for course in courses:
+        grade, _ = calculate_grade(course)
+        if grade is not None:
+            letter, points = letter_grade(grade)
+            graded.append((course, grade, letter, points))
+            status = "LOW GRADE" if grade < 75 else "OK"
+            print(f"{course['code']} | {grade:.2f}% | {letter} | {status}")
+        else:
+            print(f"{course['code']} | No assessments yet")
+
+    credits = sum(course["credits"] for course, _, _, _ in graded)
+    if credits:
+        gpa = sum(course["credits"] * points for course, _, _, points in graded) / credits
+        print(f"Current GPA (graded courses): {gpa:.2f}/4.00")
+    print("=======================================")
+
+
+def main():
+    load_data()
+    while True:
+        print("\n====== STUDENT GRADE TRACKER ======")
+        print("1. Add course")
+        print("2. Record assessment score")
+        print("3. View course summary")
+        print("4. Calculate cumulative GPA")
+        print("5. Forecast target grade")
+        print("6. Academic dashboard")
+        print("0. Exit")
+
+        choice = input("Choose an option: ").strip()
+
+        if choice == "1":
+            add_course()
+        elif choice == "2":
+            add_assessment()
+        elif choice == "3":
+            show_course_summary()
+        elif choice == "4":
+            calculate_gpa()
+        elif choice == "5":
+            forecast_grade()
+        elif choice == "6":
+            academic_dashboard()
+        elif choice == "0":
+            print("Thank you for using Student Grade Tracker!")
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+
+if __name__ == "__main__":
+    main()
+    
